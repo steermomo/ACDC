@@ -4,13 +4,13 @@ from config import get_config
 _cfg = get_config()
 
 def id_to_fname(img_id:int ) -> str:
-    return ''
+    return path.join(_cfg.images_fold_path, f'{img_id}.tif')
 
 def id_to_mask_fname(img_id):
-    return ''
+    return path.join(_cfg.iamges_fold_path, f'{img_id}_mask.tif')
 
 def id_to_xml(img_id):
-    return ''
+    return path.join(_cfg.)
 
 def fname_to_id(fname: str) -> int:
     base = path.basename(fname)

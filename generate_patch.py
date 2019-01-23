@@ -11,6 +11,7 @@ from skimage.draw import polygon
 from skimage.filters import sobel
 import utils
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from config import get_config
 from scipy import ndimage
 cfg = get_config()
@@ -36,7 +37,7 @@ def openwholeslide(path):
     return osr, levels, dims
 
 
-def makemask(img_id, scale_factor, mask_size, mask_loc, xml_path):
+def makemask(img_id, scale_factor, mask_size, mask_loc):
     """
     Reads xml file and makes annotation mask for entire slide image
     :param annotation_key: name of the annotation key file
@@ -117,9 +118,57 @@ def intersect(bbox1, bbox2):
     return False
 
 
+def check_percent(mask_arr, row, col, sz, percent):
+    area = sum(mask_arr[row:row+sz, col:col+sz])
+    if area / np.prod(mask_arr.shape) > percent:
+        return True
+    return False
+
+
+def get_accurate_mask():
+    pass
+
+
+def generate_pacth(slide: OpenSlide, anno_mask_reader, sample_mask, scale_factor, loc, blank_percent=0.9, anno_percent=0.5):
+    patches = defaultdict()
+    row, col = loc
+    scale_factor_row, scale_factor_col = scale_factor
+    mask_R, mask_C = sample_mask.shape
+    source_R, source_C = mask_R*scale_factor_row, mask_C*scale_factor_col
+    patch_sz_in_mask = int(cfg.patch_size / scale_factor_row)
+    for row_idx in range(row, row+source_R-cfg.stride, cfg.stride):
+        for col_idx in range(col, col+source_C-cfg.stride, cfg.stride):
+            mask_r_idx, mask_c_idx = int(
+                row_idx / scale_factor_row), int(row_idx / scale_factor_col)
+            anno_mask = anno_mask_reader.read_region(
+                (row_idx, col_idx), 0, (cfg.patch_size, cfg.patch_size))
+            if not check_percent(sample_mask, mask_r_idx, mask_c_idx, patch_sz_in_mask, blank_percent):
+                continue
+            if check_percent(anno_mask, 0, 0, patch_sz_in_mask, anno_percent):
+                label = 1
+            else:
+                label = 0
+            patch_name = f'r_{row_idx}_c_{col_idx}_label_{label}'
+            patch = slide.read_region(
+                (row_idx, col_idx), 0, (cfg.patch_size, cfg.patch_size))
+
+            patches[patch_name].append(patch)
+            patches[patch_name].append(anno_mask)
+    return patches
+
+
+def save_patches(img_id: int, patches: dict):
+    for patch_name, value in patches.items():
+        patch, mask = value
+        save_patch_name = path.join(cfg.patch_path, f'{patch_name}')
+        patch.save(f'{save_patch_name}.bmp')
+        mask.save(f'{save_patch_name}_mask.bmp')
+
+
 def noname(img_id, ):
     img_fname = utils.id_to_fname(img_id)
     slide, levels, dims = openwholeslide(img_fname)
+    anno_mask_reader, _, _ = openwholeslide('')
     # slide = openslide.OpenSlide(img_fname)
     w, h = dims[7]
 
@@ -150,3 +199,12 @@ def noname(img_id, ):
         anno_mask = makemask(img_id, (scale_factor_col, scale_factor_row),
                              (maxr-minr, maxc-minc), (source_r, source_c)
                              )
+        sample_mask_sub = sample_mask[minr:maxr, minc:maxc]
+
+        patches = generate_pacth(slide, anno_mask_reader, sample_mask_sub, anno_mask,
+                                 (scale_factor_row, scale_factor_row), (source_r, source_c))
+        save_patches(img_id, patches)
+
+
+if __name__ == '__main__':
+    noname(12)
