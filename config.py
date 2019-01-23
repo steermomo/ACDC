@@ -9,5 +9,7 @@ def get_config():
     cfg.sample_mask_path = ''
 
     cfg.patch_path = ''
+
+    cfg.thumbnail_path = ''
     # cfg.
     return cfg
