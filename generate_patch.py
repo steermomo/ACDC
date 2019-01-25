@@ -18,6 +18,7 @@ from glob import glob
 import multiprocessing as mp
 cfg = get_config()
 verbose = True  # 保存缩略图
+save_patch_mask = False
 
 if verbose:
     import matplotlib.pyplot as plt
@@ -158,12 +159,31 @@ def save_patches(img_id: int, patch_name, patch, mask: np.ndarray):
     save_path = path.join(cfg.patch_path, f'{img_id}')
     if not path.exists(save_path):
         os.mkdir(save_path)
-    save_patch_name = path.join(save_path, f'{patch_name}')
+    save_patch_name = path.join(save_path, f'{img_id}_{patch_name}')
     patch.save(f'{save_patch_name}.bmp')
     mask *= 255
-    skimage.io.imsave(f'{save_patch_name}_mask.bmp', skimage.img_as_uint(mask))
+    if save_patch_mask:
+        skimage.io.imsave(f'{save_patch_name}_mask.bmp',
+                          skimage.img_as_uint(mask))
     # mask.save(f'{save_patch_name}_mask.bmp')
 
+
+def center_region(img: np.ndarray):
+    """
+    判断mask中央位置是否有效
+    Arguments:
+        img {np.ndarray} -- [description] 
+    """
+    st = int(cfg.patch_size / 2 - cfg.patch_center_sz / 2)
+    ed = st + cfg.patch_center_sz
+    if np.sum(img[st:ed, st:ed]) > 0:
+        return True
+    return False
+
+def save_patch_coor(f, msg_list):
+    msg_str = [str(each) for each in msg_list]
+    msg_str = ','.join(msg_str)
+    f.write(f'{msg_str}\n')
 
 def generate_pacth(img_id: int, slide: OpenSlide, anno_mask_reader, sample_mask, scale_factor, loc, blank_percent=0.9, anno_percent=0.1):
     """[summary]
@@ -184,7 +204,12 @@ def generate_pacth(img_id: int, slide: OpenSlide, anno_mask_reader, sample_mask,
         [type] -- [description]
     """
 
-    patches = defaultdict(list)
+    # patches = defaultdict(list)
+    patch_coord = []
+    patch_path = cfg.patch_path
+    save_fp = path.join(patch_path, f'{img_id}.txt')
+    out_file = open(save_fp, 'at', encoding='utf-8')
+
     row, col = loc  # location at level 0
     scale_factor_row, scale_factor_col = scale_factor
     mask_R, mask_C = sample_mask.shape
@@ -197,25 +222,53 @@ def generate_pacth(img_id: int, slide: OpenSlide, anno_mask_reader, sample_mask,
 
             mask_r_idx, mask_c_idx = int(
                 (row_idx-row) / scale_factor_row), int((col_idx-col) / scale_factor_col)
-            # !!!
-            anno_mask = anno_mask_reader.read_region(
-                (col_idx, row_idx), 0, (cfg.patch_size, cfg.patch_size))
 
+            #　非组织部分
             if not check_percent(sample_mask, mask_r_idx, mask_c_idx, patch_sz_in_mask, blank_percent):
                 continue
-            anno_mask = skimage.color.rgb2gray(np.array(anno_mask))
-            if check_percent(anno_mask, 0, 0, cfg.patch_size, anno_percent):
+
+            # !!!read_region 方法传入位置
+            # 读取mask tif
+            anno_mask = anno_mask_reader.read_region(
+                (col_idx, row_idx), 0, (cfg.patch_size, cfg.patch_size))
+            anno_mask = skimage.color.rgb2gray(
+                np.array(anno_mask))  # RGBA to GRAY
+
+            if center_region(anno_mask):
                 label = 1
             else:
                 label = 0
-            patch_name = f'r_{row_idx}_c_{col_idx}_label_{label}'
-            # !!!!!!! col row
-            patch = slide.read_region(
-                (col_idx, row_idx), 0, (cfg.patch_size, cfg.patch_size))
-            save_patches(img_id, patch_name, patch, anno_mask)
+            # if check_percent(anno_mask, 0, 0, cfg.patch_size, anno_percent):
+            #     label = 1
+            # else:
+            #     label = 0
+            # patch_name = f'r_{row_idx}_c_{col_idx}_label_{label}'
+            # # !!!!!!! col row
+            # patch = slide.read_region(
+            #     (col_idx, row_idx), 0, (cfg.patch_size, cfg.patch_size))
+            # save_patches(img_id, patch_name, patch, anno_mask)
             # patches[patch_name].append(patch)
             # patches[patch_name].append(anno_mask)
-    return patches
+            save_patch_coor(out_file, [img_id, row_idx, col_idx, cfg.patch_size, cfg.patch_size, label])
+            patch_coord.append([
+                
+            ])
+    out_file.close()
+    print(f'==>{img_id}')
+    # return patch_coord
+
+
+def save_patches_coor(img_id: int, patches: list):
+    patch_path = cfg.patch_path
+    save_fp = path.join(patch_path, f'{img_id}.txt')
+    with open(save_fp, 'wt', encoding='utf-8') as out_file:
+        for each_patch_coor in patches:
+            info = [img_id].extend(each_patch_coor)
+            info_str = [str(each) for each in info]
+            line = ','.join(info_str)
+            out_file.write(f'{line}\n')
+    if verbose:
+        print(f'==> {img_id} write finish!')
 
 
 def process(img_id, ):
@@ -247,8 +300,10 @@ def process(img_id, ):
     anno_bbox = get_anno_bbox(img_id, scale_factor_row, scale_factor_row)
     label_image = measure.label(convx)
     if verbose:
+        anno_mask_gray = skimage.color.rgb2gray(np.array(anno_mask_reader.get_thumbnail((w, h))))
+        anno_mask_gray =  anno_mask_gray > 0
         skimage.io.imsave(path.join(cfg.thumbnail_path,
-                                    f'{img_id}_anno.bmp'), skimage.img_as_uint(anno_mask_reader.get_thumbnail((w, h))))
+                                    f'{img_id}_anno.bmp'), skimage.img_as_uint(anno_mask_gray))
         skimage.io.imsave(path.join(cfg.thumbnail_path,
                                     f'{img_id}.bmp'), skimage.img_as_uint(thumb_gray))
         skimage.io.imsave(path.join(cfg.thumbnail_path,
@@ -273,9 +328,10 @@ def process(img_id, ):
         sample_mask_sub = skimage.img_as_ubyte(
             sample_mask[minr:maxr, minc:maxc])
 
-        patches = generate_pacth(img_id, slide, anno_mask_reader, sample_mask_sub,
+        generate_pacth(img_id, slide, anno_mask_reader, sample_mask_sub,
                                  (scale_factor_row, scale_factor_row), (source_r, source_c))
         # save_patches(img_id, patches)
+        # save_patches_coor(img_id, patches)
     if verbose:
         ax.set_axis_off()
         plt.tight_layout()
@@ -283,17 +339,22 @@ def process(img_id, ):
                               f'{img_id}_label_bbox.png'))
 
 
-def main(white_list=None):
+def main(white_list=None, black_list=None):
     img_fps = glob(path.join(cfg.images_fold_path, '*.tif'))
     img_ids = [int(path.basename(each_fp).partition('.')[0])
                for each_fp in img_fps]
     if white_list is not None:
         img_ids = [ids for ids in white_list if ids in img_ids]
+    if black_list is not None:
+        img_ids = [ids for ids in img_ids if ids not in black_list]
     with mp.Pool() as p:
         p.map(process, img_ids)
 
 
 if __name__ == '__main__':
-    # main()
-    main([47, 54])
+    # black_str = '64 81 35 67 41 89 36 62 66 38 82 45 61 44 42 72 92 91 98 96 21 27 32 49 28 47'
+    # black_list = [int(each) for each in black_str.split(' ')]
+    # main(None, black_list)
+    main()
+    # main([47, 54])
     # process(47)
