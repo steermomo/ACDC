@@ -66,7 +66,7 @@ def train(model: nn.Module, optim, criterion, train_loader: data_utils.DataLoade
         loss.backward()
         optim.step()
         if i % 10 == 0:
-            print(f'\rEpoch: {epoch} loss: {losses.avg:.4f}, {top1.avg:.4f}', end='')
+            print(f'\rEpoch: {epoch} loss: {losses.avg:.4f}, acc: {top1.avg:.4f}', end='')
     print()
 
 
@@ -85,7 +85,7 @@ def val(model: nn.Module, criterion, val_loader: data_utils.DataLoader, epoch):
             losses.update(loss.item(), img.size(0))
             top1.update(acc, img.shape[0])
             if i % 10 == 0:
-                print(f'\rEpoch: {epoch}  {losses.avg:.4f},  {top1.avg:.4f}', end='')
+                print(f'\rEpoch: {epoch} val_loss:  {losses.avg:.4f}, acc: {top1.avg:.4f}', end='')
     print()
     return top1.avg
 
@@ -93,9 +93,9 @@ def val(model: nn.Module, criterion, val_loader: data_utils.DataLoader, epoch):
 def main():
     train_loader = data_utils.DataLoader(dataset=DataProvider(),
 
-                                         batch_size=240, num_workers=40)
+                                         batch_size=240, num_workers=20)
     val_loader = data_utils.DataLoader(dataset=DataProvider(val=True),
-                                       batch_size=240, num_workers=40)
+                                       batch_size=240, num_workers=20)
     best_acc = 0
     model = VGG_FCN().cuda()
     model = nn.DataParallel(model)

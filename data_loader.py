@@ -12,7 +12,7 @@ import numpy as np
 class DataProvider(data_utils.Dataset):
     def __init__(self, val=False):
         super(DataProvider, self).__init__()
-
+        self.val = val
         self.cfg = get_config()
         if val:
             self.img_ids = list(range(100, 151))
@@ -25,7 +25,7 @@ class DataProvider(data_utils.Dataset):
                 transforms.ToPILImage(),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomVerticalFlip(),
-                
+                transforms.ColorJitter(brightness=64 / 255, saturation=0.25, hue=0.04, contrast=0.75),
                 transforms.ToTensor()
             ]
         )
@@ -52,15 +52,21 @@ class DataProvider(data_utils.Dataset):
         return ret
 
     def __len__(self):
+        if self.val:
+            return 10000
         return 100000
 
     def __getitem__(self, idx):
-        _tif_idx = np.random.randint(len(self.tif_reader))
-        _reader = self.tif_reader[_tif_idx]
-        annot_idx = np.random.randint(len(self.annotaions[self.img_ids[_tif_idx]]))
-        annot = self.annotaions[self.img_ids[_tif_idx]][annot_idx]
-        x, y, w, h, label = annot
+        current_label = np.random.randint(2)  # 当前采样label
+        label = 1 - current_label
+        while label != current_label:
+            _tif_idx = np.random.randint(len(self.tif_reader))
+            _reader = self.tif_reader[_tif_idx]
+            annot_idx = np.random.randint(len(self.annotaions[self.img_ids[_tif_idx]]))
+            annot = self.annotaions[self.img_ids[_tif_idx]][annot_idx]
+            x, y, w, h, label = annot
         img = _reader.read_region((y, x), 0, (w, h)).convert('RGB')
         img = np.array(img)
+        img = np.rot90(img, np.random.randint(4))
         img = self.transform(img)
         return img, label
