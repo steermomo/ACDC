@@ -1,12 +1,11 @@
 import torch.utils.data as data_utils
-from config import get_config, get_val_config
+from preprocess.config import get_config
 from openslide import OpenSlide
-import utils
-from glob import glob
-from os import path
+from preprocess import utils
 from torchvision import transforms
 from collections import defaultdict
 import numpy as np
+import openslide
 
 
 class DataProvider(data_utils.Dataset):
@@ -20,15 +19,21 @@ class DataProvider(data_utils.Dataset):
             self.img_ids = list(range(1, 101))
         self.tif_reader = self._get_reader()
         self.annotaions = self._get_annotations()
-        self.transform = transforms.Compose(
-            [
+        if self.val:
+            self.transform = transforms.Compose([
                 transforms.ToPILImage(),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.ColorJitter(brightness=64 / 255, saturation=0.25, hue=0.04, contrast=0.75),
                 transforms.ToTensor()
-            ]
-        )
+            ])
+        else:
+            self.transform = transforms.Compose(
+                [
+                    transforms.ToPILImage(),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomVerticalFlip(),
+                    transforms.ColorJitter(brightness=64 / 255, saturation=0.25, hue=0.04, contrast=0.75),
+                    transforms.ToTensor()
+                ]
+            )
 
     def _get_reader(self):
         ret = []
@@ -56,7 +61,7 @@ class DataProvider(data_utils.Dataset):
             return 10000
         return 100000
 
-    def __getitem__(self, idx):
+    def _get_region(self):
         current_label = np.random.randint(2)  # 当前采样label
         label = 1 - current_label
         while label != current_label:
@@ -65,7 +70,24 @@ class DataProvider(data_utils.Dataset):
             annot_idx = np.random.randint(len(self.annotaions[self.img_ids[_tif_idx]]))
             annot = self.annotaions[self.img_ids[_tif_idx]][annot_idx]
             x, y, w, h, label = annot
-        img = _reader.read_region((y, x), 0, (w, h)).convert('RGB')
+        try:
+            img = _reader.read_region((y, x), 0, (w, h)).convert('RGB')
+        except openslide.lowlevel.OpenSlideError:
+            print(f'@@@Slide: {self.img_ids[_tif_idx]}, {x, y, w, h}')
+            return self._get_region()
+        return img, label
+
+    def __getitem__(self, idx):
+        # current_label = np.random.randint(2)  # 当前采样label
+        # label = 1 - current_label
+        # while label != current_label:
+        #     _tif_idx = np.random.randint(len(self.tif_reader))
+        #     _reader = self.tif_reader[_tif_idx]
+        #     annot_idx = np.random.randint(len(self.annotaions[self.img_ids[_tif_idx]]))
+        #     annot = self.annotaions[self.img_ids[_tif_idx]][annot_idx]
+        #     x, y, w, h, label = annot
+        # img = _reader.read_region((y, x), 0, (w, h)).convert('RGB')
+        img, label = self._get_region()
         img = np.array(img)
         img = np.rot90(img, np.random.randint(4))
         img = self.transform(img)

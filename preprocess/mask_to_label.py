@@ -1,4 +1,4 @@
-from config import get_config
+from preprocess.config import get_config
 from skimage import io
 from glob import glob
 import os

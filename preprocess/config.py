@@ -10,18 +10,18 @@ def get_config():
     cfg = Config()
     cfg.annotation_path = '/home/data/ACDC/Annotation'
     cfg.images_fold_path = '/home/data/ACDC/Images'
-    cfg.mask_path = '/home/data/ACDC/train/mask'
-    cfg.sample_mask_path = '/home/data/ACDC/train/sample_mask'
+    cfg.mask_path = '/home/data/ACDC/Mask'
+    # cfg.sample_mask_path = '/home/data/ACDC/train/sample_mask'
 
-    cfg.patch_path = '/home/data/ACDC/train/patch'
+    cfg.patch_path = '/home/data/ACDC/Patch'
 
-    cfg.thumbnail_path = '/home/data/ACDC/train/thumbnail'
+    cfg.thumbnail_path = '/home/data/ACDC/thumbnail'
 
     cfg.patch_size = 244
     cfg.patch_center_sz = 128
     cfg.stride = 128
     # cfg.
-    for each in [cfg.mask_path, cfg.sample_mask_path, cfg.patch_path, cfg.thumbnail_path]:
+    for each in [cfg.mask_path, cfg.patch_path, cfg.thumbnail_path]:
         if not os.path.exists(each):
             print(f'make dir => {os.path.abspath(each)}')
             os.mkdir(each)

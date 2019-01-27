@@ -5,23 +5,23 @@ from openslide import OpenSlide
 
 import numpy as np
 import skimage
-from skimage import morphology, measure
+from skimage import morphology, measure, color, io, filters
 from skimage.draw import polygon
 # from skimage.morphology import watershed
-from skimage.filters import sobel
-import utils
+from preprocess import utils
 import xml.etree.ElementTree as ET
-from collections import defaultdict
-from config import get_config
+from preprocess.config import get_config
 from scipy import ndimage
 from glob import glob
 import multiprocessing as mp
+
 cfg = get_config()
 verbose = True  # 保存缩略图
 save_patch_mask = False
 
 if verbose:
     import matplotlib.pyplot as plt
+
     plt.switch_backend('agg')
     import matplotlib.patches as mpatches
 
@@ -101,20 +101,41 @@ def save_thumbnail(img, save_path):
     pass
 
 
-def get_sample_mask(thumbnail: np.ndarray):
+def filter_ch(rgb):
+    """
+    获取slide中字体的mask 取反返回
+    注:如47号Slide
+    :param rgb: thumbnail 彩图
+    :return:
+    """
+    # (h, w, c) = rgb.shape
+    rgb = rgb.astype(np.int)
+    r_f = (rgb[:, :, 0] > 47) & (rgb[:, :, 0] < 130)
+    g_f = (rgb[:, :, 1] > 47) & (rgb[:, :, 1] < 130)
+    b_f = (rgb[:, :, 2] > 40) & (rgb[:, :, 2] < 110)
+    mask = (r_f & b_f & g_f)
+    mask = morphology.binary_dilation(mask, selem=morphology.disk(3))  # 膨胀 使字体范围扩大
+    return ~mask
+
+
+def get_sample_mask(thumbnail_rgb: np.ndarray):
     """
     获取样本的粗略mask
+    update: 2019.01.27 改为 otsu
+    :param thumbnail_rgb: 缩略图的彩图
+    :return:
     """
-    thumbnail = 1. - thumbnail
-    # skimage general examples
-    elevation_map = sobel(thumbnail)
-    markers = np.zeros_like(thumbnail)
-    markers[thumbnail <= 1/255.] = 1
-    markers[thumbnail >= 15/255.] = 2
-    segmentation = morphology.watershed(elevation_map, markers)
-    segmentation = ndimage.binary_fill_holes(segmentation - 1)
-    segmentation = morphology.remove_small_objects(segmentation)
-    return segmentation
+    thumbnail_gray = color.rgb2gray(thumbnail_rgb)
+    thresh = filters.threshold_otsu(thumbnail_gray)
+    mask = thumbnail_gray < thresh
+
+    ch_mask = filter_ch(thumbnail_rgb)
+
+    mask = mask & ch_mask
+    mask = ndimage.morphology.binary_fill_holes(mask)
+    mask = morphology.remove_small_objects(mask)
+
+    return mask
 
 
 def overlap1D(xmin1, xmax1, xmin2, xmax2):
@@ -135,15 +156,20 @@ def intersect(bbox1, bbox2):
 
 
 def check_percent(mask_arr, row, col, sz, percent):
+    """
+
+    :param mask_arr: mask数组
+    :param row:
+    :param col:
+    :param sz:
+    :param percent: 有效百分比
+    :return:
+    """
     upper_bound = mask_arr.max()
-    area = np.sum(mask_arr[row:row+sz, col:col+sz])/upper_bound
+    area = np.sum(mask_arr[row:row + sz, col:col + sz]) / upper_bound
     if area / (sz ** 2) > percent:
         return True
     return False
-
-
-def get_accurate_mask():
-    pass
 
 
 def save_patches(img_id: int, patch_name, patch, mask: np.ndarray):
@@ -163,14 +189,13 @@ def save_patches(img_id: int, patch_name, patch, mask: np.ndarray):
     patch.save(f'{save_patch_name}.bmp')
     mask *= 255
     if save_patch_mask:
-        skimage.io.imsave(f'{save_patch_name}_mask.bmp',
-                          skimage.img_as_uint(mask))
+        skimage.io.imsave(f'{save_patch_name}_mask.bmp', skimage.img_as_uint(mask))
     # mask.save(f'{save_patch_name}_mask.bmp')
 
 
 def center_region(img: np.ndarray):
     """
-    判断mask中央位置是否有效
+    判断mask中央位置是否
     Arguments:
         img {np.ndarray} -- [description] 
     """
@@ -180,158 +205,143 @@ def center_region(img: np.ndarray):
         return True
     return False
 
-def save_patch_coor(f, msg_list):
+
+def save_patch_info_line(f, msg_list):
     msg_str = [str(each) for each in msg_list]
     msg_str = ','.join(msg_str)
     f.write(f'{msg_str}\n')
 
-def generate_pacth(img_id: int, slide: OpenSlide, anno_mask_reader, sample_mask, scale_factor, loc, blank_percent=0.9, anno_percent=0.1):
-    """[summary]
-    
-    Arguments:
-        img_id {int} -- [description]
-        slide {OpenSlide} -- [description]
-        anno_mask_reader {[type]} -- [description]
-        sample_mask {[type]} -- [description]
-        scale_factor {[type]} -- [description]
-        loc {[type]} -- [description]
-    
-    Keyword Arguments:
-        blank_percent {float} -- [description] (default: {0.9})
-        anno_percent {float} -- [description] (default: {0.1})
-    
-    Returns:
-        [type] -- [description]
+
+def generate_pacth(img_id: int, anno_mask_reader, sample_mask, scale_factor, loc, blank_percent=0.9,
+                   anno_percent=0.1):
+    """
+    生成patch坐标信息
+    :param img_id:
+    :param slide:
+    :param anno_mask_reader: 标注mask tif reader
+    :param sample_mask: 样本的mask
+    :param scale_factor:
+    :param loc:
+    :param blank_percent:
+    :param anno_percent:
+    :return:
     """
 
     # patches = defaultdict(list)
-    patch_coord = []
-    patch_path = cfg.patch_path
+    # patch_coord = []
+    patch_path = cfg.patch_path  # patch info 保存位置
     save_fp = path.join(patch_path, f'{img_id}.txt')
     out_file = open(save_fp, 'at', encoding='utf-8')
 
     row, col = loc  # location at level 0
     scale_factor_row, scale_factor_col = scale_factor
-    mask_R, mask_C = sample_mask.shape
-    source_R, source_C = int(
-        mask_R*scale_factor_row), int(mask_C*scale_factor_col)
-    patch_sz_in_mask = int(cfg.patch_size / scale_factor_row)
+    mask_R, mask_C = sample_mask.shape  # 当前采样区域mask的大小
+    source_R, source_C = int(mask_R * scale_factor_row), int(mask_C * scale_factor_col)  # 当前采样区域在slide中的大小
+    patch_sz_in_mask = int(cfg.patch_size / scale_factor_row)  # patch 在mask缩略图中的大小
 
-    for row_idx in range(row, row+source_R-cfg.stride, cfg.stride):
-        for col_idx in range(col, col+source_C-cfg.stride, cfg.stride):
+    for row_idx in range(row, row + source_R - cfg.stride, cfg.stride):  # 迭代slide row
+        for col_idx in range(col, col + source_C - cfg.stride, cfg.stride):
 
-            mask_r_idx, mask_c_idx = int(
-                (row_idx-row) / scale_factor_row), int((col_idx-col) / scale_factor_col)
+            # 缩略图sample mask, 采样区域的相对位置
+            mask_r_idx, mask_c_idx = int((row_idx - row) / scale_factor_row), int((col_idx - col) / scale_factor_col)
 
-            #　非组织部分
+            # 　非组织部分
             if not check_percent(sample_mask, mask_r_idx, mask_c_idx, patch_sz_in_mask, blank_percent):
                 continue
 
-            # !!!read_region 方法传入位置
+            # !!!read_region 方法 注意传入位置
             # 读取mask tif
-            anno_mask = anno_mask_reader.read_region(
-                (col_idx, row_idx), 0, (cfg.patch_size, cfg.patch_size))
-            anno_mask = skimage.color.rgb2gray(
-                np.array(anno_mask))  # RGBA to GRAY
+            anno_mask = anno_mask_reader.read_region((col_idx, row_idx), 0, (cfg.patch_size, cfg.patch_size))
+            anno_mask = color.rgb2gray(np.array(anno_mask))  # RGBA to GRAY
 
             if center_region(anno_mask):
                 label = 1
             else:
                 label = 0
-            # if check_percent(anno_mask, 0, 0, cfg.patch_size, anno_percent):
-            #     label = 1
-            # else:
-            #     label = 0
-            # patch_name = f'r_{row_idx}_c_{col_idx}_label_{label}'
-            # # !!!!!!! col row
-            # patch = slide.read_region(
-            #     (col_idx, row_idx), 0, (cfg.patch_size, cfg.patch_size))
-            # save_patches(img_id, patch_name, patch, anno_mask)
-            # patches[patch_name].append(patch)
-            # patches[patch_name].append(anno_mask)
-            save_patch_coor(out_file, [img_id, row_idx, col_idx, cfg.patch_size, cfg.patch_size, label])
-            patch_coord.append([
-                
-            ])
+
+            save_patch_info_line(out_file, [img_id, row_idx, col_idx, cfg.patch_size, cfg.patch_size, label])
+            # patch_coord.append([
+            #
+            # ])
     out_file.close()
     print(f'==>{img_id}')
     # return patch_coord
 
 
-def save_patches_coor(img_id: int, patches: list):
-    patch_path = cfg.patch_path
-    save_fp = path.join(patch_path, f'{img_id}.txt')
-    with open(save_fp, 'wt', encoding='utf-8') as out_file:
-        for each_patch_coor in patches:
-            info = [img_id].extend(each_patch_coor)
-            info_str = [str(each) for each in info]
-            line = ','.join(info_str)
-            out_file.write(f'{line}\n')
-    if verbose:
-        print(f'==> {img_id} write finish!')
+def get_glass_mask(thumbnail_gray: np.ndarray):
+    """
+    获取玻璃盖板的mask, 用于判断相似组织是否被标记
+    注:比赛中相似组织可能只标记一份
+    :param thumbnail_gray:
+    :return:
+    """
+    # print(thumbnail_gray.shape)
+    # assert thumbnail_gray.shape[-1] == 1
+    mask = thumbnail_gray != 1  # background is 1, samples was splited by background glass
+
+    mask = morphology.binary_dilation(mask)
+    mask = morphology.binary_erosion(mask)
+    convex = morphology.convex_hull_object(mask)
+    # convex = morphology.remove_small_holes(convex)
+    convex = morphology.remove_small_objects(convex)
+    return convex
 
 
 def process(img_id, ):
     img_fname = utils.id_to_fname(img_id)
-    slide, levels, dims = openwholeslide(img_fname)
-    anno_mask_reader, _, _ = openwholeslide(utils.id_to_mask_fname(img_id))
+
+    slide_reader, levels, dims = openwholeslide(img_fname)  # slide reader
+    anno_mask_reader, _, _ = openwholeslide(utils.id_to_mask_fname(img_id))  # mask reader
     # slide = openslide.OpenSlide(img_fname)
     w, h = dims[6]
 
-    thumb = slide.get_thumbnail((w, h))
+    thumb = np.asarray(slide_reader.get_thumbnail((w, h)).convert('RGB'))
     r, c = h, w
     scale_factor_row, scale_factor_col = float(
         dims[0][1]) / r, float(dims[0][0]) / c
-    thumb_gray = skimage.color.rgb2gray(np.array(thumb))
 
-    sample_mask = get_sample_mask(thumb_gray)
-    if verbose:
-        skimage.io.imsave(path.join(cfg.sample_mask_path,
-                                    f'{img_id}.bmp'), skimage.img_as_ubyte(sample_mask))
+    thumb_gray = color.rgb2gray(thumb)
 
-    mask = thumb_gray != 1  # background is 1, samples was splited by background glass
+    sample_mask = get_sample_mask(thumb)
+    # if verbose:
+    #     io.imsave(path.join(cfg.thumbnail_path, f'{img_id}_sample_mask.bmp'), skimage.img_as_ubyte(sample_mask))
 
-    mask = morphology.binary_dilation(mask)
-    mask = morphology.binary_erosion(mask)
-    convx = morphology.convex_hull_object(mask)
-    convx = morphology.remove_small_holes(convx)
-    convx = morphology.remove_small_objects(convx)
+    glass_mask = get_glass_mask(thumb_gray)  # 玻璃基板mask
 
     anno_bbox = get_anno_bbox(img_id, scale_factor_row, scale_factor_row)
-    label_image = measure.label(convx)
+
+    label_image = measure.label(glass_mask)
+
     if verbose:
         anno_mask_gray = skimage.color.rgb2gray(np.array(anno_mask_reader.get_thumbnail((w, h))))
-        anno_mask_gray =  anno_mask_gray > 0
-        skimage.io.imsave(path.join(cfg.thumbnail_path,
-                                    f'{img_id}_anno.bmp'), skimage.img_as_uint(anno_mask_gray))
-        skimage.io.imsave(path.join(cfg.thumbnail_path,
-                                    f'{img_id}.bmp'), skimage.img_as_uint(thumb_gray))
-        skimage.io.imsave(path.join(cfg.thumbnail_path,
-                                    f'{img_id}_label.bmp'), skimage.img_as_uint(convx*255))
-        fig, ax = plt.subplots(figsize=(10, 6))
+        anno_mask_gray = anno_mask_gray > 0
+        fig, ax = plt.subplots(1, 4, figsize=(24, 16))
+        ax[0].imshow(sample_mask, cmap=plt.cm.gray)
+        ax[1].imshow(sample_mask * thumb_gray, cmap=plt.cm.gray)
+        ax[2].imshow(anno_mask_gray*thumb_gray, cmap=plt.cm.gray)
+        ax[3].imshow(thumb_gray, cmap=plt.cm.gray)
+
+        plt.savefig(path.join(cfg.thumbnail_path, f'{img_id}.png'))
+        fig, ax = plt.subplots(figsize=(6, 10))
         ax.imshow(label_image)
+
     for region in measure.regionprops(label_image):
         # if intersected, this region is annotated
         minr, minc, maxr, maxc = region.bbox
-        source_r, source_c = int(
-            minr * scale_factor_col), int(minc * scale_factor_row)
         if not intersect(region.bbox, anno_bbox):
+            # 当前组织片未被标记
             continue
-        # anno_mask = makemask(img_id, (scale_factor_col, scale_factor_row),
-        #                      (maxr-minr, maxc-minc), (source_r, source_c)
-        #                      )
         if verbose:
             rect = mpatches.Rectangle((minc, minr), maxc - minc, maxr - minr,
                                       fill=False, edgecolor='red', linewidth=2)
             ax.add_patch(rect)
 
-        sample_mask_sub = skimage.img_as_ubyte(
-            sample_mask[minr:maxr, minc:maxc])
+        source_r, source_c = int(minr * scale_factor_col), int(minc * scale_factor_row)  # region 在slide中的位置
+        sample_mask_sub = skimage.img_as_ubyte(sample_mask[minr:maxr, minc:maxc])  # 对应 region 的组织 mask
 
-        generate_pacth(img_id, slide, anno_mask_reader, sample_mask_sub,
-                                 (scale_factor_row, scale_factor_row), (source_r, source_c))
-        # save_patches(img_id, patches)
-        # save_patches_coor(img_id, patches)
+        generate_pacth(img_id, anno_mask_reader, sample_mask_sub,
+                       (scale_factor_row, scale_factor_row), (source_r, source_c))
+
     if verbose:
         ax.set_axis_off()
         plt.tight_layout()

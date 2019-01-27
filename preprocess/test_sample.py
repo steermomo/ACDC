@@ -1,4 +1,4 @@
-import utils as uti
+from preprocess import utils as uti
 
 
 def test_fname_id():

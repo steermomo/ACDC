@@ -1,5 +1,5 @@
 from os import path
-from config import get_config
+from preprocess.config import get_config
 
 _cfg = get_config()
 
