@@ -14,7 +14,7 @@ class DataProvider(data_utils.Dataset):
         self.val = val
         self.cfg = get_config()
         if val:
-            self.img_ids = list(range(100, 151))
+            self.img_ids = list(range(101, 151))
         else:
             self.img_ids = list(range(1, 101))
         self.tif_reader = self._get_reader()
@@ -30,10 +30,20 @@ class DataProvider(data_utils.Dataset):
                     transforms.ToPILImage(),
                     transforms.RandomHorizontalFlip(),
                     transforms.RandomVerticalFlip(),
-                    transforms.ColorJitter(brightness=64 / 255, saturation=0.25, hue=0.04, contrast=0.75),
+                    # transforms.ColorJitter(brightness=64 / 255, saturation=0.25, hue=0.04, contrast=0.75),
                     transforms.ToTensor()
                 ]
             )
+
+    def _get_reader_by_id(self, img_id):
+        """
+        某些slide存在空缺,读取会导致 OpenSlide error, 使得无法进行后续读取
+        :param img_id:
+        :return:
+        """
+        tif_fp = utils.id_to_fname(img_id)
+        reader = OpenSlide(tif_fp)
+        return reader
 
     def _get_reader(self):
         ret = []
@@ -58,7 +68,7 @@ class DataProvider(data_utils.Dataset):
 
     def __len__(self):
         if self.val:
-            return 10000
+            return 50000
         return 100000
 
     def _get_region(self):
@@ -70,10 +80,14 @@ class DataProvider(data_utils.Dataset):
             annot_idx = np.random.randint(len(self.annotaions[self.img_ids[_tif_idx]]))
             annot = self.annotaions[self.img_ids[_tif_idx]][annot_idx]
             x, y, w, h, label = annot
+            w = self.cfg.patch_size
+            h = w
         try:
             img = _reader.read_region((y, x), 0, (w, h)).convert('RGB')
         except openslide.lowlevel.OpenSlideError:
             print(f'@@@Slide: {self.img_ids[_tif_idx]}, {x, y, w, h}')
+            # OpenSlide 对象失效,重新创建
+            self.tif_reader[_tif_idx] = self._get_reader_by_id(self.img_ids[_tif_idx])
             return self._get_region()
         return img, label
 
@@ -89,6 +103,7 @@ class DataProvider(data_utils.Dataset):
         # img = _reader.read_region((y, x), 0, (w, h)).convert('RGB')
         img, label = self._get_region()
         img = np.array(img)
-        img = np.rot90(img, np.random.randint(4))
+        if not self.val:
+            img = np.rot90(img, np.random.randint(4))
         img = self.transform(img)
         return img, label

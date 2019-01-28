@@ -3,6 +3,17 @@ import torch
 import torch.nn as nn
 
 
+class InceptionV3(nn.Module):
+    def __init__(self):
+        super(InceptionV3, self).__init__()
+        net = models.inception_v3()
+        net.fc = nn.Linear(in_features=2048, out_features=2, bias=True)
+        self.net = net
+
+    def forward(self, x):
+        return self.net(x)
+
+
 class VGG_FCN(nn.Module):
     def __init__(self):
         # vgg = models.vgg16(pretrained=True)
