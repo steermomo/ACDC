@@ -17,7 +17,7 @@ def get_config():
 
     cfg.thumbnail_path = '/home/data/ACDC/thumbnail'
 
-    cfg.patch_size = 299
+    cfg.patch_size = 244
     cfg.patch_center_sz = 128
     cfg.stride = 128
     # cfg.

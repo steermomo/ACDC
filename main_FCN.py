@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch import optim
 import torch.utils.data as data_utils
 from data_loader import DataProvider
-from model import VGG_FCN, InceptionV3
+from model import VGG_FCN
 import shutil
 from sklearn import metrics
 import numpy as np
@@ -66,11 +66,11 @@ def train(model: nn.Module, optim, criterion, train_loader: data_utils.DataLoade
         # out = model(img)
 
         # inception
-        outputs, aux_outputs = model(img)
+        outputs = model(img)
         # print(outputs.shape)
-        loss1 = criterion(outputs, label)
-        loss2 = criterion(aux_outputs, label)
-        loss = loss1 + 0.4 * loss2
+            loss = criterion(outputs.view(-1, 2), label)
+        # loss2 = criterion(aux_outputs, label)
+        # loss = loss1 + 0.4 * loss2
 
         _, pred = outputs.topk(1, 1, True, True)
         pred = pred.view(-1).detach().cpu().numpy()
@@ -157,7 +157,7 @@ def main():
     val_loader = data_utils.DataLoader(dataset=DataProvider(val=True),
                                        batch_size=60 * gpu_num, num_workers=18, worker_init_fn=worker_init_fn)
     best_acc = 0
-    model = InceptionV3().cuda()
+    model = VGG_FCN().cuda()
     model = nn.DataParallel(model)
     # optimizer = optim.Adam(model.module.parameters(), lr=1e-4)
     optimizer = optim.RMSprop(model.module.parameters(), lr=0.05 / 2, alpha=0.9, eps=1.0, momentum=0.9, )  #weight_decay=0.5)
@@ -183,7 +183,7 @@ def main():
         acc = val(model, criterion, val_loader, epoch)
         is_best = acc > best_acc
         best_acc = max(acc, best_acc)
-        if epoch % 2 == 0:
+        if epoch % 1 == 0:
             save_checkpoint({
                 'epoch': epoch + 1,
                 # 'arch': args.arch,

@@ -5,6 +5,7 @@ from preprocess import utils
 from torchvision import transforms
 from collections import defaultdict
 import numpy as np
+import torch
 import openslide
 
 
@@ -13,10 +14,16 @@ class DataProvider(data_utils.Dataset):
         super(DataProvider, self).__init__()
         self.val = val
         self.cfg = get_config()
+        current_stat = np.random.get_state()
+        np.random.seed(0)
+        img_ids = list(range(1, 151))
+        val_ids = np.random.choice(img_ids, 30, replace=False)
+        train_ids = list(set(img_ids) - set(val_ids))
+        np.random.set_state(current_stat)
         if val:
-            self.img_ids = list(range(101, 151))
+            self.img_ids = val_ids
         else:
-            self.img_ids = list(range(1, 101))
+            self.img_ids = train_ids
         self.tif_reader = self._get_reader()
         self.annotaions = self._get_annotations()
         if self.val:
@@ -30,7 +37,7 @@ class DataProvider(data_utils.Dataset):
                     transforms.ToPILImage(),
                     transforms.RandomHorizontalFlip(),
                     transforms.RandomVerticalFlip(),
-                    # transforms.ColorJitter(brightness=64 / 255, saturation=0.25, hue=0.04, contrast=0.75),
+                    transforms.ColorJitter(brightness=30 / 255, saturation=0.25, hue=0.04, contrast=0.75),
                     transforms.ToTensor()
                 ]
             )
@@ -64,6 +71,7 @@ class DataProvider(data_utils.Dataset):
                     line_sp = list(map(int, line_sp))
                     img_id, x, y, w, h, label = line_sp
                     ret[each_id].append([x, y, w, h, label])
+        print('@==@')
         return ret
 
     def __len__(self):
@@ -83,9 +91,11 @@ class DataProvider(data_utils.Dataset):
             w = self.cfg.patch_size
             h = w
         try:
-            img = _reader.read_region((y, x), 0, (w, h)).convert('RGB')
+            row_rand_shift = np.random.randint(8) - 4
+            col_rand_shift = np.random.randint(8) - 4
+            img = _reader.read_region((y+col_rand_shift, x+row_rand_shift), 0, (w, h)).convert('RGB')
         except openslide.lowlevel.OpenSlideError:
-            print(f'@@@Slide: {self.img_ids[_tif_idx]}, {x, y, w, h}')
+            # print(f'@@@Slide: {self.img_ids[_tif_idx]}, {x, y, w, h}')
             # OpenSlide 对象失效,重新创建
             self.tif_reader[_tif_idx] = self._get_reader_by_id(self.img_ids[_tif_idx])
             return self._get_region()
@@ -107,3 +117,39 @@ class DataProvider(data_utils.Dataset):
             img = np.rot90(img, np.random.randint(4))
         img = self.transform(img)
         return img, label
+
+
+class AllPatchProvider(DataProvider):
+    def __init__(self):
+        super(AllPatchProvider, self).__init__(val=False)
+
+    def _cal_patch_nums(self):
+        cnt = 0
+        cnt_level = []  # 记录patch idx 对应的img_id
+        for img_id in self.img_ids:
+            annotations = self.annotaions[img_id]  # 保证有序
+            cnt += len(annotations)
+            cnt_level.append(cnt)
+        self.patch_cnt = cnt
+        self.cnt_level = cnt_level
+
+    def __len__(self):
+        return self.patch_cnt
+
+    def __getitem__(self, idx):
+        for i in range(len(self.cnt_level)):
+            if idx > self.cnt_level[i]:
+                continue
+            reader = self.tif_reader[i]
+            if i == 0:
+                last_cnt = 0
+            else:
+                last_cnt = self.cnt_level[i - 1]
+            annotation = self.annotaions[i][idx - last_cnt]
+            x, y, w, h, label = annotation
+            w = self.cfg.patch_size
+            h = w
+            img_pil = reader.read_region((y, x), 0, (w, h)).convert('RGB')
+            img = np.array(img_pil)
+            patch_info = [self.img_ids[i], x, y, w, h, label]
+            return img, label, patch_info

@@ -9,9 +9,6 @@ from sklearn import metrics
 import numpy as np
 import torchvision.utils as vutils
 import os
-from tensorboardX import SummaryWriter
-
-writer = SummaryWriter('log_model2')
 
 
 class AverageMeter(object):
@@ -52,55 +49,6 @@ def accuracy(output, target, topk=(1,)):
         correct_k = correct.view(-1).float().sum(0, keepdim=True)
         return correct_k.mul_(100.0 / batch_size).item()
 
-
-def train(model: nn.Module, optim, criterion, train_loader: data_utils.DataLoader, epoch):
-    model.train()
-    losses = AverageMeter()
-    top1 = AverageMeter()
-    pred_arr = []
-    label_arr = []
-    for i, (img, label) in enumerate(train_loader):
-        print(f'\rEpoch: {epoch} {i} / {len(train_loader)}', end='')
-        label_arr.append(label.numpy())
-        img, label = img.cuda(), label.cuda()
-        # out = model(img)
-
-        # inception
-        outputs, aux_outputs = model(img)
-        # print(outputs.shape)
-        loss1 = criterion(outputs, label)
-        loss2 = criterion(aux_outputs, label)
-        loss = loss1 + 0.4 * loss2
-
-        _, pred = outputs.topk(1, 1, True, True)
-        pred = pred.view(-1).detach().cpu().numpy()
-        pred_arr.append(pred)
-
-        # print(out.shape, label.shape)
-        acc = accuracy(outputs, label)
-        # loss = criterion(outputs.view(-1, 2), label)
-
-        losses.update(loss.item(), img.size(0))
-        top1.update(acc, img.shape[0])
-
-        optim.zero_grad()
-        loss.backward()
-        optim.step()
-        # if i % 10 == 0:
-        print(f' loss: {losses.avg:.4f}, acc: {top1.avg:.4f}', end='')
-        if i == 0:
-            niter = epoch * len(train_loader) + i
-            x = vutils.make_grid(img)
-            writer.add_image('Train_Image', x, niter)
-    # niter = epoch * len(train_loader) + i
-    writer.add_scalar('Train/train_loss', losses.avg, epoch)
-    print()
-    pred_arr = np.concatenate(pred_arr)
-    label_arr = np.concatenate(label_arr)
-    cfm = metrics.confusion_matrix(label_arr, pred_arr)
-    print(cfm)
-
-
 def val(model: nn.Module, criterion, val_loader: data_utils.DataLoader, epoch):
     model.eval()
     losses = AverageMeter()
@@ -129,38 +77,30 @@ def val(model: nn.Module, criterion, val_loader: data_utils.DataLoader, epoch):
             losses.update(loss.item(), img.size(0))
             top1.update(acc, img.shape[0])
             # if i % 10 == 0:
-            print(f' val_loss:  {losses.avg:.4f}, acc: {top1.avg:.4f}', end='')
-
-            if i == 0:
-                niter = epoch * len(val_loader) + i
-                x = vutils.make_grid(img)
-                writer.add_image('Val_Image', x, niter)
     print()
     # niter = epoch * len(val_loader) + i
-    writer.add_scalar('Train/val_oss', losses.avg, epoch)
+    # writer.add_scalar('Train/val_oss', losses.avg, epoch)
     pred_arr = np.concatenate(pred_arr)
     label_arr = np.concatenate(label_arr)
     cfm = metrics.confusion_matrix(label_arr, pred_arr)
     print(cfm)
     return top1.avg
 
-
 def worker_init_fn(worker_id):
     np.random.seed(np.random.get_state()[1][0] + worker_id)
 
 
 def main():
-    gpu_num = torch.cuda.device_count()
     train_loader = data_utils.DataLoader(dataset=DataProvider(),
 
-                                         batch_size=60 * gpu_num, num_workers=18, worker_init_fn=worker_init_fn)
+                                         batch_size=120, num_workers=18, worker_init_fn=worker_init_fn)
     val_loader = data_utils.DataLoader(dataset=DataProvider(val=True),
-                                       batch_size=60 * gpu_num, num_workers=18, worker_init_fn=worker_init_fn)
+                                       batch_size=120, num_workers=18, worker_init_fn=worker_init_fn)
     best_acc = 0
     model = InceptionV3().cuda()
     model = nn.DataParallel(model)
     # optimizer = optim.Adam(model.module.parameters(), lr=1e-4)
-    optimizer = optim.RMSprop(model.module.parameters(), lr=0.05 / 2, alpha=0.9, eps=1.0, momentum=0.9, )  #weight_decay=0.5)
+    optimizer = optim.RMSprop(model.module.parameters(), lr=0.05 / 2,  momentum=0.9, weight_decay=0.5)
 
     criterion = nn.CrossEntropyLoss()
     start_epoch = 0
@@ -179,7 +119,7 @@ def main():
     for epoch in range(start_epoch, 500):
         lr_scheduler.step()
         np.random.seed()
-        train(model, optimizer, criterion, train_loader, epoch)
+        # train(model, optimizer, criterion, train_loader, epoch)
         acc = val(model, criterion, val_loader, epoch)
         is_best = acc > best_acc
         best_acc = max(acc, best_acc)
