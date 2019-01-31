@@ -1,9 +1,12 @@
-import multiresolutionimageinterface as mir
-from preprocess.config import get_config
-from os import path
-from glob import glob
-from preprocess import utils
 import multiprocessing as mp
+from glob import glob
+from os import path
+
+import multiresolutionimageinterface as mir
+
+from preprocess import utils
+from preprocess.config import get_config
+
 cfg = get_config()
 
 

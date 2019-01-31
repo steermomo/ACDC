@@ -1,19 +1,19 @@
+import multiprocessing as mp
 import os
+import xml.etree.ElementTree as ET
+from glob import glob
 from os import path
-
-from openslide import OpenSlide
 
 import numpy as np
 import skimage
+from openslide import OpenSlide
+from scipy import ndimage
 from skimage import morphology, measure, color, io, filters
 from skimage.draw import polygon
+
 # from skimage.morphology import watershed
 from preprocess import utils
-import xml.etree.ElementTree as ET
 from preprocess.config import get_config
-from scipy import ndimage
-from glob import glob
-import multiprocessing as mp
 
 cfg = get_config()
 verbose = True  # 保存缩略图
@@ -134,7 +134,7 @@ def get_sample_mask(thumbnail_rgb: np.ndarray):
     mask = mask & ch_mask
     mask = ndimage.morphology.binary_fill_holes(mask)
     mask = morphology.remove_small_objects(mask)
-
+    mask = morphology.binary_dilation(mask, morphology.disk(4))
     return mask
 
 

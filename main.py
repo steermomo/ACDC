@@ -1,15 +1,17 @@
+import os
+import shutil
+
+import numpy as np
 import torch
 import torch.nn as nn
-from torch import optim
 import torch.utils.data as data_utils
+import torchvision.utils as vutils
+from sklearn import metrics
+from tensorboardX import SummaryWriter
+from torch import optim
+
 from data_loader import DataProvider
 from model import VGG_FCN
-import shutil
-from sklearn import metrics
-import numpy as np
-import torchvision.utils as vutils
-import os
-from tensorboardX import SummaryWriter
 
 writer = SummaryWriter('log')
 

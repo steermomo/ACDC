@@ -1,14 +1,15 @@
+import os
+
+import numpy as np
 import torch
 import torch.nn as nn
-from torch import optim
 import torch.utils.data as data_utils
-from data_loader import DataProvider
-from model import VGG_FCN, InceptionV3
-import shutil
 from sklearn import metrics
-import numpy as np
-import torchvision.utils as vutils
-import os
+from torch import optim
+
+from data_loader import DataProvider
+from model import InceptionV3
+
 
 def val(model: nn.Module, criterion, val_loader: data_utils.DataLoader, epoch):
     model.eval()
@@ -54,7 +55,7 @@ def main():
     model = InceptionV3().cuda()
     model = nn.DataParallel(model)
     # optimizer = optim.Adam(model.module.parameters(), lr=1e-4)
-    optimizer = optim.RMSprop(model.module.parameters(), lr=0.05 / 2,  momentum=0.9, weight_decay=0.5)
+    optimizer = optim.RMSprop(model.module.parameters(), lr=0.05 / 2, momentum=0.9, weight_decay=0.5)
 
     criterion = nn.CrossEntropyLoss()
     start_epoch = 0
@@ -68,8 +69,8 @@ def main():
         print("=> loaded checkpoint '{}' (epoch {})"
               .format(resume, checkpoint['epoch']))
 
-    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=int(2e6 / len(train_loader)), gamma=0.5,)
-                                             # last_epoch=start_epoch)
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=int(2e6 / len(train_loader)), gamma=0.5, )
+    # last_epoch=start_epoch)
     for epoch in range(start_epoch, 500):
         lr_scheduler.step()
         np.random.seed()

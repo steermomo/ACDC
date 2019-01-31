@@ -1,9 +1,10 @@
-from config import get_config
-from os import path
-from glob import glob
 # from skimage import io
 # import numpy as np
 from collections import defaultdict
+from glob import glob
+from os import path
+
+from config import get_config
 
 
 # import matplotlib.pyplot as plt

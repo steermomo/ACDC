@@ -1,15 +1,17 @@
+import os
+import shutil
+
+import numpy as np
 import torch
 import torch.nn as nn
-from torch import optim
 import torch.utils.data as data_utils
+import torchvision.utils as vutils
+from sklearn import metrics
+from tensorboardX import SummaryWriter
+from torch import optim
+
 from data_loader import DataProvider
 from model import VGG_FCN
-import shutil
-from sklearn import metrics
-import numpy as np
-import torchvision.utils as vutils
-import os
-from tensorboardX import SummaryWriter
 
 writer = SummaryWriter('log_model2')
 
@@ -68,7 +70,7 @@ def train(model: nn.Module, optim, criterion, train_loader: data_utils.DataLoade
         # inception
         outputs = model(img)
         # print(outputs.shape)
-            loss = criterion(outputs.view(-1, 2), label)
+        loss = criterion(outputs.view(-1, 2), label)
         # loss2 = criterion(aux_outputs, label)
         # loss = loss1 + 0.4 * loss2
 
@@ -153,9 +155,9 @@ def main():
     gpu_num = torch.cuda.device_count()
     train_loader = data_utils.DataLoader(dataset=DataProvider(),
 
-                                         batch_size=60 * gpu_num, num_workers=18, worker_init_fn=worker_init_fn)
+                                         batch_size=60 * gpu_num, num_workers=28, worker_init_fn=worker_init_fn)
     val_loader = data_utils.DataLoader(dataset=DataProvider(val=True),
-                                       batch_size=60 * gpu_num, num_workers=18, worker_init_fn=worker_init_fn)
+                                       batch_size=60 * gpu_num, num_workers=28, worker_init_fn=worker_init_fn)
     best_acc = 0
     model = VGG_FCN().cuda()
     model = nn.DataParallel(model)

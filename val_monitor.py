@@ -1,14 +1,15 @@
+import os
+import shutil
+
+import numpy as np
 import torch
 import torch.nn as nn
-from torch import optim
 import torch.utils.data as data_utils
-from data_loader import DataProvider
-from model import VGG_FCN, InceptionV3
-import shutil
 from sklearn import metrics
-import numpy as np
-import torchvision.utils as vutils
-import os
+from torch import optim
+
+from data_loader import DataProvider
+from model import InceptionV3
 
 
 class AverageMeter(object):
@@ -49,6 +50,7 @@ def accuracy(output, target, topk=(1,)):
         correct_k = correct.view(-1).float().sum(0, keepdim=True)
         return correct_k.mul_(100.0 / batch_size).item()
 
+
 def val(model: nn.Module, criterion, val_loader: data_utils.DataLoader, epoch):
     model.eval()
     losses = AverageMeter()
@@ -86,6 +88,7 @@ def val(model: nn.Module, criterion, val_loader: data_utils.DataLoader, epoch):
     print(cfm)
     return top1.avg
 
+
 def worker_init_fn(worker_id):
     np.random.seed(np.random.get_state()[1][0] + worker_id)
 
@@ -100,7 +103,7 @@ def main():
     model = InceptionV3().cuda()
     model = nn.DataParallel(model)
     # optimizer = optim.Adam(model.module.parameters(), lr=1e-4)
-    optimizer = optim.RMSprop(model.module.parameters(), lr=0.05 / 2,  momentum=0.9, weight_decay=0.5)
+    optimizer = optim.RMSprop(model.module.parameters(), lr=0.05 / 2, momentum=0.9, weight_decay=0.5)
 
     criterion = nn.CrossEntropyLoss()
     start_epoch = 0
@@ -114,8 +117,8 @@ def main():
         print("=> loaded checkpoint '{}' (epoch {})"
               .format(resume, checkpoint['epoch']))
 
-    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=int(2e6 / len(train_loader)), gamma=0.5,)
-                                             # last_epoch=start_epoch)
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=int(2e6 / len(train_loader)), gamma=0.5, )
+    # last_epoch=start_epoch)
     for epoch in range(start_epoch, 500):
         lr_scheduler.step()
         np.random.seed()

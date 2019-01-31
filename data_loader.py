@@ -1,12 +1,13 @@
-import torch.utils.data as data_utils
-from preprocess.config import get_config
-from openslide import OpenSlide
-from preprocess import utils
-from torchvision import transforms
 from collections import defaultdict
+
 import numpy as np
-import torch
 import openslide
+import torch.utils.data as data_utils
+from openslide import OpenSlide
+from torchvision import transforms
+
+from preprocess import utils
+from preprocess.config import get_config
 
 
 class DataProvider(data_utils.Dataset):
@@ -93,7 +94,7 @@ class DataProvider(data_utils.Dataset):
         try:
             row_rand_shift = np.random.randint(8) - 4
             col_rand_shift = np.random.randint(8) - 4
-            img = _reader.read_region((y+col_rand_shift, x+row_rand_shift), 0, (w, h)).convert('RGB')
+            img = _reader.read_region((y + col_rand_shift, x + row_rand_shift), 0, (w, h)).convert('RGB')
         except openslide.lowlevel.OpenSlideError:
             # print(f'@@@Slide: {self.img_ids[_tif_idx]}, {x, y, w, h}')
             # OpenSlide 对象失效,重新创建
@@ -153,3 +154,49 @@ class AllPatchProvider(DataProvider):
             img = np.array(img_pil)
             patch_info = [self.img_ids[i], x, y, w, h, label]
             return img, label, patch_info
+
+
+class PredictPatchLoader(data_utils.Dataset):
+    def __init__(self, tif_reader: OpenSlide, rowst, rowed, colst, coled, patch_size, stride, alpha, sd, img_id):
+        super(PredictPatchLoader, self).__init__()
+        self._reader = tif_reader
+        self.rowst = rowst
+        self.rowed = rowed
+        self.colst = colst
+        self.coled = coled
+        self.patch_size = patch_size
+        self.stride = stride
+        self.alpha = alpha
+        self.sd = sd
+        self.rows = (self.rowed - self.rowst - self.patch_size - (alpha - 1) * sd) // self.stride + 1
+        self.cols = (self.coled - self.colst - self.patch_size - (alpha - 1) * sd) // self.stride + 1
+        self.img_id = img_id
+        self.transform = transforms.Compose([
+            # transforms.ToPILImage()
+            # transforms.ToTensor(),
+        ])
+
+    def get_rc(self):
+        return self.rows, self.cols
+
+    def __len__(self):
+
+        return self.rows * self.cols
+
+    def __getitem__(self, idx):
+        row_idx = idx // self.cols
+        col_idx = idx % self.cols
+
+        rst = row_idx * self.stride + self.rowst
+        cst = col_idx * self.stride + self.colst
+        d = self.patch_size + (self.alpha - 1) * self.sd
+
+        region = self._reader.read_region((cst, rst), 0, (d, d)).convert('RGB')
+        region = np.asarray(region)
+        ret = []
+        for row_sf in range(0, self.alpha * self.sd, self.sd):
+            for col_sf in range(0, self.alpha * self.sd, self.sd):
+                current_patch = region[row_sf:row_sf + self.patch_size, col_sf:col_sf + self.patch_size]
+                current_patch = np.transpose(current_patch, (2, 0, 1)) / 255.
+                ret.append(current_patch)
+        return np.stack(ret)

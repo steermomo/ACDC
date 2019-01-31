@@ -1,19 +1,27 @@
+# from time import time
+import datetime
 import os
 from os import path
+
+# import matplotlib.pyplot as plt
+import matplotlib as mpl
 import numpy as np
-import skimage
-from skimage import morphology, measure, color, io, filters
-from model import VGG_FCN
-from scipy import ndimage
-from glob import glob
 import torch
 import torch.nn as nn
+import torch.utils.data as data_utils
 from openslide import OpenSlide
-import matplotlib.pyplot as plt
+from scipy import ndimage
+from skimage import morphology, measure, color, io, filters, transform
 from tqdm import tqdm
 
-plt.switch_backend('agg')
+from data_loader import PredictPatchLoader
+from model import VGG_FCN
+from preprocess import utils
+
+# plt.switch_backend('agg')
 PATCH_SIZE = 2868
+PATCH_SIZE = 2452  # 70
+# PATCH_SIZE = 4038  # 128 out
 alpha = 4
 OPT_SIZE = int((PATCH_SIZE - 244) / 32 + 1)
 DPT_SIZE = OPT_SIZE * alpha
@@ -75,7 +83,7 @@ def get_sample_mask(thumbnail_rgb: np.ndarray):
     mask = mask & ch_mask
     mask = ndimage.morphology.binary_fill_holes(mask)
     mask = morphology.remove_small_objects(mask)
-
+    mask = morphology.binary_dilation(mask, morphology.disk(4))
     return mask
 
 
@@ -136,69 +144,148 @@ def save_predict():
     pass
 
 
-def predict(model: nn.Module, slide_reader: OpenSlide, thumbnail, bbox, scale_factor):
+class time_sp():
+    def __init__(self):
+        self._t = datetime.datetime.now()
+
+    def time_span(self, info):
+        now = datetime.datetime.now()
+        time_delta = now - self._t
+        print(f'耗时{time_delta.seconds} : {info}')
+        self._t = datetime.datetime.now()
+
+
+def predict(model: nn.Module, slide_reader: OpenSlide, img_id, bbox, scale_factor):
     """
 
     :param model:
     :param slide_reader:
-    :param sample_mask:
-    :param loc:
+    :param img_id:
+    :param bbox:
     :param scale_factor:
     :return:
     """
+
     minr, minc, maxr, maxc = bbox
     scf_row, scf_col = scale_factor
     row_st_origin, col_st_origin = int(minr * scf_row), int(minc * scf_col)
     row_ed_origin, col_ed_origin = int(maxr * scf_row), int(maxc * scf_col)
 
+
+
     row_length, col_length = row_ed_origin - row_st_origin, col_ed_origin - col_st_origin
 
-    row_ed_origin += PATCH_STRIDE - (row_length - PATCH_SIZE) % PATCH_STRIDE
-    col_ed_origin += PATCH_STRIDE - (col_length - PATCH_SIZE) % PATCH_STRIDE
+    if row_length < 500 or col_length < 500:
+        return
+
+    # print('read region')
+    # print(row_st_origin, col_st_origin)
+    # print((col_length + (alpha - 1) * PATCH_STRIDE, row_length + (alpha - 1) * PATCH_STRIDE))
+    if (row_length - PATCH_SIZE - (alpha - 1) * SD) % PATCH_STRIDE != 0:
+        row_ed_origin += PATCH_STRIDE - (row_length - PATCH_SIZE - (alpha - 1) * SD) % PATCH_STRIDE
+    if (col_length - PATCH_SIZE - (alpha - 1) * SD) % PATCH_STRIDE != 0:
+        col_ed_origin += PATCH_STRIDE - (col_length - PATCH_SIZE - (alpha - 1) * SD) % PATCH_STRIDE
     # dpt_table
-    whole_dpt = []
-    for row_idx in tqdm(range(row_st_origin, row_ed_origin + 1, PATCH_STRIDE)):
-        dpt_table_row = []
-        for col_idx in range(col_st_origin, col_ed_origin + 1, PATCH_STRIDE):
-            img = slide_reader.read_region((col_idx, row_idx), 0,
-                                           (PATCH_SIZE + alpha * SD, PATCH_SIZE + alpha * SD)).convert('RGB')
-            img_np = np.asarray(img) / 255.
-            opt_tables = []
-            for row_shift in range(0, alpha * SD + 1, SD):
-                opt_tables.append([])
-                for col_shift in range(0, alpha * SD + 1, SD):
-                    img_np = np.asarray(img) / 255.
-                    current_patch = img_np[row_shift:row_shift + PATCH_SIZE, col_shift:col_shift + PATCH_SIZE]
-                    img_tensor = torch.tensor(current_patch).float()
-                    img_tensor = img_tensor.permute(2, 0, 1).cuda()
-                    img_tensor.unsqueeze_(0)
+    # whole_dpt = []
+    # cm_hot = mpl.cm.get_cmap('bwr')
+    cm_hot = mpl.cm.get_cmap('coolwarm')
 
-                    with torch.no_grad():
-                        # 1 * 2 * n * n
-                        pred = model(img_tensor)
-                        prob_map = nn.functional.softmax(pred, dim=1)
-                        prob_map_np = prob_map[0, 1, :, :].cpu().numpy()
-                        opt_tables[-1].append(prob_map_np)
-            dpt_table = merge_opt(opt_tables)
-            dpt_table_row.append(dpt_table)
+    patch_loader = data_utils.DataLoader(dataset=PredictPatchLoader(slide_reader,
+                                                                    row_st_origin, row_ed_origin,
+                                                                    col_st_origin, col_ed_origin,
+                                                                    PATCH_SIZE, PATCH_STRIDE,
+                                                                    alpha, SD, img_id
+                                                                    ),
+                                         batch_size=1,
+                                         num_workers=3)
+    cols = (col_ed_origin - col_st_origin - PATCH_SIZE - (alpha - 1) * SD) // PATCH_STRIDE + 1
+    all_dpt = []
+    dpt_table_row = []
+    t = time_sp()
+    for data in patch_loader:
+        # t.time_span('转为Tensor')
+        # row_idx = idx // cols
+        # col_idx = idx % cols
+        data.squeeze_()
+        opt_table = []
+        with torch.no_grad():
+            data = data.float()
+            for opt_row in range(alpha):
+                opt_table.append([])
+                for opt_col in range(alpha):
+                    current_data = data[opt_row*alpha+opt_col, :, :, :]
+                    current_data.unsqueeze_(0)
+                    # print(current_data.shape)
+                    # t.time_span('Tensor 切片')
+                    outputs = model(current_data)
+                    opts = nn.functional.softmax(outputs, dim=1).cpu().numpy()
+                    opts = opts[0, 1, :, :]
+                    # print(opts.shape)
+                    opt_table[-1].append(opts)
 
-        row_img = np.concatenate(dpt_table_row, axis=1)
-        whole_dpt.append(row_img)
-    region_img = thumbnail[minr:maxr, minc:maxc]
-    whole_pred = np.concatenate(whole_dpt)
-    plt.figure(figsize=(20, 20))
-    plt.imshow(region_img, cmap=plt.cm.gray)
-    plt.imshow(whole_pred, cmap=plt.cm.gist_heat, alpha=0.4)
-    info = ','.join(map(str, bbox))
-    plt.savefig(f'pred/{info}.bmp')
-    # save_im = (whole_pred*255).astype(np.uint8)
+        # t.time_span('预测耗时')
+        dpt_table = merge_opt(opt_table)
+        # t.time_span('Merge OPT')
+        dpt_table_row.append(dpt_table)
 
-    # io.imsave(f'{info}.bmp', save_im)
+        if len(dpt_table_row) == cols:
+            row_img = np.concatenate(dpt_table_row, axis=1)
+            all_dpt.append(row_img)
+            # for each in all_dpt:
+            #     print(each.shape)
+            # print(f'all_apt len {len(all_dpt)}')
+            dpt_table_row = []
+
+    if len(all_dpt) == 0:
+        print(bbox)
+        return
+    whole_pred = np.concatenate(all_dpt)
+    # with open('dpt.dump', 'wb') as outfile:
+    #     pickle.dump(whole_pred, outfile)
+    htop_map = cm_hot(whole_pred)
+
+    dims = slide_reader.level_dimensions
+    down_level = -5
+    fr = dims[0][1] / dims[down_level][1]
+    fc = dims[0][0] / dims[down_level][0]
+    # d = int( PATCH_SIZE + (alpha-1) * PATCH_STRIDE / fc)
+
+    # print(
+    #     (col_st_origin , row_st_origin),
+    #     len(dims) - 5,
+    #     (int((col_ed_origin - col_st_origin) // fc), int((row_ed_origin - row_st_origin) // fr))
+    # )
+    region_img = slide_reader.read_region(
+        (col_st_origin, row_st_origin),
+        len(dims) + down_level,
+        (int((col_ed_origin - col_st_origin) // fc), int((row_ed_origin - row_st_origin) // fr))
+
+    ).convert('RGB')
+
+    # region_img = thumbnail[minr:maxr, minc:maxc]
+    tr, tc = whole_pred.shape
+
+    region_img = np.asarray(region_img)
+    region_img = transform.resize(region_img, (tr, tc))
+    # region_img = np.resize(region_img, (tr, tc, 3))
+
+    save_image = 0.7 * region_img + 0.3 * color.rgba2rgb(htop_map)
+    save_image = save_image.clip(0, 1.0)
+    info = '_'.join(map(str, (row_st_origin, col_st_origin, row_ed_origin - row_st_origin, col_ed_origin - col_st_origin)))
+    if not path.exists(f'pred/{img_id}'):
+        os.mkdir(f'pred/{img_id}')
+    np.save(f'pred/{img_id}/{info}.npy', whole_pred)
+    io.imsave(f'pred/{img_id}/{info}_gray.bmp', whole_pred)
+    io.imsave(f'pred/{img_id}/{info}_region.bmp', region_img)
+    io.imsave(f'pred/{img_id}/{info}_heatmap.bmp', htop_map)
+    io.imsave(f'pred/{img_id}/{info}.bmp', save_image)
 
 
-def process(tif_path):
+
+def process(img_id):
+    tif_path = utils.id_to_fname(img_id)
     slide_reader, levels, dims = openwholeslide(tif_path)
-    w, h = dims[6]
+    w, h = dims[7]
 
     thumbnail = np.asarray(slide_reader.get_thumbnail((w, h)).convert('RGB'))
 
@@ -232,11 +319,15 @@ def process(tif_path):
 
     model = model.cuda()
     model.eval()
-    for region_bbox in sample_bbox:
-        predict(model, slide_reader, thumbnail, region_bbox, (scale_factor_row, scale_factor_col))
+    for region_bbox in tqdm(sample_bbox):
+        predict(model, slide_reader, img_id, region_bbox, (scale_factor_row, scale_factor_col))
 
 
 if __name__ == '__main__':
     test_slide = '/run/user/1000/gvfs/sftp:host=192.168.1.101/home/data/ACDC/Images/124.tif'
-    test_slide = '/home/data/ACDC/Images/124.tif'
-    process(test_slide)
+    test_slide = '/home/data/ACDC/Images/135.tif'
+    np.random.seed(0)
+    img_ids = list(range(1, 151))
+    val_ids = np.random.choice(img_ids, 30, replace=False)
+    for each_id in val_ids:
+        process(each_id)
